@@ -21,7 +21,7 @@ if not BOT_TOKEN or not GSPREAD_CREDS:
 # --- Google Sheets Configuration ---
 
 # **အရေးကြီး:** သင်ပေးပို့လိုက်သော Sheet ID ကို ဤနေရာတွင် ထည့်သွင်းပါ
-SHEET_ID = "100264885632749254582" 
+SHEET_ID = "1jjPtDpsUOToRR4CuZM1ap37LMAR_imF44QEmfT6t24c" 
 worksheet = None # Global Worksheet instance
 
 # --- ဈေးနှုန်း အချက်အလက်များ ---
