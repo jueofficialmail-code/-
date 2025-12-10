@@ -1,1 +1,1 @@
-web: python meow_tg_premiun.py
+web: python meow_tg_premium.py
