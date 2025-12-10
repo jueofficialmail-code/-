@@ -1,7 +1,8 @@
 import logging
 import os
-import psycopg2 # PostgreSQL Database driver
-from psycopg2 import sql 
+import json
+import gspread
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
@@ -11,12 +12,17 @@ logging.basicConfig(
 )
 
 # 2. Global Variables
-# BOT_TOKEN နှင့် DATABASE_URL ကို Render Settings (Environment Variables) ကနေ ဆွဲယူသုံးခြင်း
 BOT_TOKEN = os.environ.get("BOT_TOKEN") 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+GSPREAD_CREDS = os.environ.get("GSPREAD_CREDS") # Render က JSON Key
+# GSPREAD_CREDS ကို မထည့်ရင် Error ပြပါလိမ့်မယ်
+if not BOT_TOKEN or not GSPREAD_CREDS:
+    raise ValueError("BOT_TOKEN သို့မဟုတ် GSPREAD_CREDS environment variable ကို ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။")
 
-if not BOT_TOKEN or not DATABASE_URL:
-    raise ValueError("BOT_TOKEN သို့မဟုတ် DATABASE_URL environment variable ကို ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။")
+# --- Google Sheets Configuration ---
+
+# **အရေးကြီး:** သင်ပေးပို့လိုက်သော Sheet ID ကို ဤနေရာတွင် ထည့်သွင်းပါ
+SHEET_ID = "100264885632749254582" 
+worksheet = None # Global Worksheet instance
 
 # --- ဈေးနှုန်း အချက်အလက်များ ---
 PREMIUM_PRICES = {
@@ -32,77 +38,72 @@ STAR_PRICES = {
 }
 # --- ---
 
-# --- Database Helper Functions ---
+# --- Google Sheet Helper Functions ---
 
-def get_db_connection():
-    """Database Connection ကို ရယူခြင်း (Render PostgreSQL အတွက် SSL ပါဝင်သည်)"""
-    # sslmode='require' သည် Render Database ချိတ်ဆက်မှုများအတွက် လိုအပ်ပါသည်။
-    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-    return conn
-
-def setup_database():
-    """Database ထဲမှာ 'users' table ကို ဖန်တီးခြင်း"""
-    conn = None
+def setup_gsheet():
+    """Google Sheet ကို Service Account ဖြင့် ချိတ်ဆက်ခြင်း"""
+    global worksheet
+    
+    # Environment Variable ကနေ JSON စာသားကို ယူပြီး Dictionary အဖြစ် ပြောင်းလဲခြင်း
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        creds = json.loads(GSPREAD_CREDS)
         
-        # users table ကို ဖန်တီးခြင်း (user_id ကို Primary Key အဖြစ် သတ်မှတ်သည်)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                username VARCHAR(50),
-                first_name VARCHAR(50) NOT NULL,
-                join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        cur.close()
-        print("Database setup complete: 'users' table is ready.")
+        # Service Account ကို authorize လုပ်ခြင်း
+        gc = gspread.service_account_from_dict(creds)
         
-    except (Exception, psycopg2.Error) as error:
-        print("Database setup error:", error)
-    finally:
-        if conn:
-            conn.close()
+        # Sheet ကို ID ဖြင့် ဖွင့်ခြင်း
+        spreadsheet = gc.open_by_key(SHEET_ID)
+        
+        # ပထမဆုံး Sheet (Worksheet) ကို ရယူခြင်း
+        worksheet = spreadsheet.sheet1 
+        print("Google Sheet setup complete.")
 
-def save_new_user(user_id, username, first_name):
-    """User အသစ်ကို Database ထဲသို့ ထည့်သွင်းခြင်း (user_id ရှိပြီးသားဆိုရင် ကျော်သွားမည်)"""
-    conn = None
+    except Exception as e:
+        print(f"Google Sheet connection error: {e}")
+        # Connection Failed ဖြစ်ရင် Bot ကို ရပ်တန့်ဖို့အတွက် Exception ထုတ်
+        raise
+
+def save_new_user_to_sheet(user_id, username, first_name):
+    """User Data ကို Sheet ထဲတွင် ထည့်သွင်းခြင်း (Duplication ကို စစ်ဆေးသည်)"""
+    if worksheet is None:
+        # worksheet မရှိသေးရင် အရင်ဆုံး ချိတ်ဆက်ပါ
+        setup_gsheet()
+
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        # User_id သည် ရှိပြီးသားလား စစ်ဆေးရန် (Column A)
+        # ကြီးမားသော Sheet များအတွက် အချိန်ကြာနိုင်ပါသည်။
+        user_ids = [str(x) for x in worksheet.col_values(1)] 
         
-        # ON CONFLICT DO NOTHING ကို သုံးခြင်းဖြင့် ရှိပြီးသား User ကို ထပ်မထည့်တော့ဘဲ ရှောင်ရှားသည်
-        cur.execute("""
-            INSERT INTO users (user_id, username, first_name) 
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO NOTHING;
-        """, (user_id, username, first_name))
+        if str(user_id) not in user_ids:
+            # အချက်အလက်အသစ်ကို List အဖြစ် ဖန်တီးခြင်း
+            new_row = [
+                user_id,
+                username if username else "",
+                first_name,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ]
+            
+            # Sheet ရဲ့ အောက်ဆုံးအတန်းမှာ ထည့်သွင်းခြင်း
+            worksheet.append_row(new_row)
+            print(f"User {user_id} saved to Google Sheet.")
+        # else: User ရှိပြီးသားဖြစ်သောကြောင့် ဘာမှ မလုပ်ပါ
         
-        conn.commit()
-        cur.close()
-        
-    except (Exception, psycopg2.Error) as error:
-        print(f"Error saving user {user_id}:", error)
-    finally:
-        if conn:
-            conn.close()
+    except Exception as e:
+        print(f"Error saving user {user_id} to sheet: {e}")
+        # Error ဖြစ်ရင် Bot ကို ဆက် run နေစေရန်အတွက် Pass လုပ်
+        pass 
 
 # --- ---
 
-# 3. /start command အတွက် Function
+# 3. /start command အတွက် Function (User Data သိမ်းဆည်းခြင်း ပါဝင်သည်)
 async def start(update: Update, context):
-    """/start command နှိပ်ရင် ပထမဆုံး မက်ဆေ့ချ်၊ Inline Keyboard နဲ့ Reply Keyboard ကို ပို့ပေးတဲ့ function"""
-    
-    # User ရဲ့ အချက်အလက်များကို ရယူခြင်း
     user = update.effective_user
     user_id = user.id
     username = user.username if user.username else None
     first_name = user.first_name if user.first_name else "အမည်မသိသူ"
     
-    # ဤနေရာတွင် User Data ကို Database ထဲသို့ ထည့်သွင်းခြင်း
-    save_new_user(user_id, username, first_name)
+    # Google Sheet ထဲမှာ User ကို ထည့်သွင်းခြင်း
+    save_new_user_to_sheet(user_id, username, first_name)
     
     # --- Inline Keyboard (Premium / Star ရွေးချယ်ရန်) ---
     inline_keyboard = [
@@ -133,7 +134,7 @@ async def start(update: Update, context):
         reply_markup=reply_markup
     )
 
-# 4. Inline Keyboard Button နှိပ်ခြင်းကို စီမံခန့်ခွဲတဲ့ Function (ယခင်အတိုင်း)
+# 4. Inline Keyboard Button နှိပ်ခြင်းကို စီမံခန့်ခွဲတဲ့ Function
 async def button_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -170,7 +171,7 @@ async def button_callback(update: Update, context):
         ])
     )
 
-# 5. Reply Keyboard Button များအတွက် Message Handler (ယခင်အတိုင်း)
+# 5. Reply Keyboard Button များအတွက် Message Handler
 async def handle_message(update: Update, context):
     text = update.message.text
 
@@ -208,17 +209,19 @@ async def handle_message(update: Update, context):
 def main():
     """Bot ကို စတင်ခြင်း"""
     
-    # Database ကို စတင် setup လုပ်ခြင်း (Table ရှိမရှိ စစ်ဆေးပြီး မရှိရင် ဖန်တီးသည်)
-    setup_database()
-    
+    # Bot စတင်ချိန်မှာ Google Sheet ကို ချိတ်ဆက်ခြင်း
+    try:
+        setup_gsheet()
+    except Exception as e:
+        print("Bot failed to start due to Sheet connection error.")
+        return # ချိတ်ဆက်မှု မအောင်မြင်ရင် Bot မစပါ
+        
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Handlers များ
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback, pattern="^(premium_prices|star_prices|back_to_main)$"))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    # Bot ကို စတင် run ခြင်း (Polling mode ဖြင့်)
     print("Bot စတင် အလုပ်လုပ်နေပါပြီ...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
