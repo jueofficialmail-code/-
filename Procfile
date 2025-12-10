@@ -1,1 +1,1 @@
-web: python bot.py
+web: python meow_tg_premiun.py
