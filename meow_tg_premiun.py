@@ -14,24 +14,27 @@ logging.basicConfig(
 # 2. Global Variables (Environment Variables မှ လုံခြုံစွာ ခေါ်ယူခြင်း)
 BOT_TOKEN = os.environ.get("BOT_TOKEN") 
 GSPREAD_CREDS = os.environ.get("GSPREAD_CREDS")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID") # Render Environment မှ ယူသည်
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+# Render Web Service အတွက် Environment Variables
+WEB_SERVICE_URL = os.environ.get("WEB_SERVICE_URL") 
+PORT = int(os.environ.get("PORT", "8080")) # Default 8080
 
 # အရေးကြီးသော Variables များ မပြည့်စုံပါက Error ပြခြင်း
-if not all([BOT_TOKEN, GSPREAD_CREDS, ADMIN_CHAT_ID]):
+if not all([BOT_TOKEN, GSPREAD_CREDS, ADMIN_CHAT_ID, WEB_SERVICE_URL]):
     missing_vars = [name for name, val in [("BOT_TOKEN", BOT_TOKEN), ("GSPREAD_CREDS", GSPREAD_CREDS), 
-                                           ("ADMIN_CHAT_ID", ADMIN_CHAT_ID)] if not val]
+                                           ("ADMIN_CHAT_ID", ADMIN_CHAT_ID), ("WEB_SERVICE_URL", WEB_SERVICE_URL)] if not val]
     raise ValueError(f"Environment variables မပြည့်စုံပါ: {', '.join(missing_vars)}။")
 
 # --- Google Sheets Configuration ---
 SHEET_ID = "1jjPtDpsUOToRR4CuZM1ap37LMAR_imF44QEmfT6t24c" 
-USER_WORKSHEET = None # Sheet1 - User Data
-SETTINGS_WORKSHEET = None # Sheet2 - Settings Data ('Settings' လို့ နာမည်ပေးထားရမည်)
+USER_WORKSHEET = None 
+SETTINGS_WORKSHEET = None 
 
 # --- Coin စနစ်နှင့် ဈေးနှုန်း အချက်အလက်များ (Fixed Data) ---
 COIN_PACKS = {
-    100: 2000, # 100 Coin = 2000 MMK
-    500: 9000, # 500 Coin = 9000 MMK
-    1000: 17000 # 1000 Coin = 17000 MMK
+    100: 2000, 
+    500: 9000, 
+    1000: 17000 
 }
 
 # --- Google Sheet Helper Functions ---
@@ -44,8 +47,7 @@ def setup_gsheet():
         gc = gspread.service_account_from_dict(creds)
         spreadsheet = gc.open_by_key(SHEET_ID)
         
-        USER_WORKSHEET = spreadsheet.sheet1 # Sheet1 ကို User Data အဖြစ် သုံးသည်
-        # 'Settings' Sheet ကို Name ဖြင့် ခေါ်သည်
+        USER_WORKSHEET = spreadsheet.sheet1
         SETTINGS_WORKSHEET = spreadsheet.worksheet("Settings") 
         
         print("Google Sheet setup complete. (User Data & Settings)")
@@ -57,7 +59,6 @@ def setup_gsheet():
         raise
 
 def get_user_row(user_id):
-    """USER_WORKSHEET (Sheet1) ထဲမှ အတန်းတစ်ခုလုံးကို ရှာဖွေခြင်း"""
     if USER_WORKSHEET is None: setup_gsheet()
     try:
         user_ids = [str(x) for x in USER_WORKSHEET.col_values(1)]
@@ -69,7 +70,6 @@ def get_user_row(user_id):
     return None, None
 
 def save_new_user(user_id, username, first_name):
-    """User အသစ်ကို Coin 0 ဖြင့် ထည့်သွင်းခြင်း"""
     if USER_WORKSHEET is None: setup_gsheet()
     user_data, row_index = get_user_row(user_id)
     if user_data is None:
@@ -81,14 +81,12 @@ def save_new_user(user_id, username, first_name):
             print(f"Error saving new user: {e}")
 
 def get_coin_balance(user_id):
-    """လက်ရှိ Coin Balance ကို ပြန်လည်ရယူခြင်း"""
     user_data, _ = get_user_row(user_id)
     if user_data and len(user_data) > 4 and user_data[4].isdigit():
         return int(user_data[4])
     return 0
     
 def update_coin_balance(user_id, amount):
-    """User ရဲ့ Coin Balance ကို ပြောင်းလဲခြင်း (တိုး/လျော့)"""
     if USER_WORKSHEET is None: setup_gsheet()
     user_data, row_index = get_user_row(user_id)
     if user_data is None: return False, "User ကို Database တွင် ရှာမတွေ့ပါ။"
@@ -96,7 +94,6 @@ def update_coin_balance(user_id, amount):
         current_balance = int(user_data[4]) if len(user_data) > 4 and user_data[4].isdigit() else 0
         new_balance = current_balance + amount
         if new_balance < 0: return False, "Coin လက်ကျန် မလုံလောက်ပါ။"
-        # Column E (5) မှာ Coin ကို Update လုပ်ခြင်း
         USER_WORKSHEET.update_cell(row_index, 5, new_balance)
         return True, new_balance
     except Exception as e:
@@ -105,7 +102,6 @@ def update_coin_balance(user_id, amount):
 
 # --- Setting Control Functions ---
 def get_setting(key):
-    """Settings Sheet ကနေ Value ကို ရယူခြင်း"""
     if SETTINGS_WORKSHEET is None: setup_gsheet()
     try:
         cell = SETTINGS_WORKSHEET.find(key, in_column=1)
@@ -116,7 +112,6 @@ def get_setting(key):
     return None
 
 def set_setting(key, value):
-    """Settings Sheet ထဲမှာ Value ကို ပြောင်းလဲခြင်း"""
     if SETTINGS_WORKSHEET is None: setup_gsheet()
     try:
         cell = SETTINGS_WORKSHEET.find(key, in_column=1)
@@ -127,7 +122,7 @@ def set_setting(key, value):
         print(f"Error setting value for {key}: {e}")
     return False
 
-# --- Helper Function for Payment Details (Settings Sheet မှ ယူရန် ပြင်ဆင်) ---
+# --- Helper Function for Payment Details ---
 
 async def get_payment_details():
     """Settings Sheet မှ Payment Details အားလုံးကို Real-time ရယူခြင်း"""
@@ -141,12 +136,11 @@ async def get_payment_details():
         "wave": {"name": wave_name or "Unknown", "phone": wave_phone or "N/A", "bank_name": "WavePay"}
     }
     
-# --- 3. /start command အတွက် Function (NameError ကို ဖြေရှင်းပေးသည်) ---
+# --- 3. /start command အတွက် Function ---
 async def start(update: Update, context):
     user = update.effective_user
     save_new_user(user.id, user.username, user.first_name)
     
-    # Inline Keyboard (Premium / Star ရွေးချယ်ရန်)
     inline_keyboard = [
         [
             InlineKeyboardButton("💎 Telegram Premium", callback_data="premium_prices"),
@@ -155,7 +149,6 @@ async def start(update: Update, context):
     ]
     inline_markup = InlineKeyboardMarkup(inline_keyboard)
 
-    # Reply Keyboard (အမြဲတမ်း ပေါ်နေမည့် Buttons)
     reply_keyboard = [
         [KeyboardButton("💰 Coin ဈေးနှုန်းများ"), KeyboardButton("👤 User Account")],
         [KeyboardButton("❓ Help Center")]
@@ -196,7 +189,6 @@ async def handle_message(update: Update, context):
         return 
 
     elif text == "👤 User Account":
-        # Coin Balance ကို Sheet ကနေ ဆွဲယူပြီး ပြသခြင်း
         balance = get_coin_balance(user.id) 
         response = (f"👤 **{user.first_name}** ၏ Account အချက်အလက်များ:\n\n"
                     f"💰 **လက်ရှိ Coin Balance:** `{balance}` Coin\n"
@@ -221,7 +213,6 @@ async def handle_photo(update: Update, context):
     
     await update.message.reply_text(response, parse_mode="Markdown")
 
-    # Admin ကို Noti ပို့မည့် စာသား
     admin_noti = (
         "🚨 **ငွေလွှဲပြေစာ အသစ် ရောက်ရှိလာပါပြီ** 🚨\n\n"
         f"👤 User ID: `{user.id}`\n"
@@ -230,7 +221,6 @@ async def handle_photo(update: Update, context):
     )
     
     try:
-        # ဓာတ်ပုံကို Admin Chat ID သို့ ပို့ပေးခြင်း
         photo_file_id = update.message.photo[-1].file_id
         await context.bot.send_photo(
             chat_id=ADMIN_CHAT_ID, 
@@ -255,10 +245,8 @@ async def button_callback(update: Update, context):
 
     data = query.data
     
-    # Settings Sheet ကနေ Real-time Details ကို ရယူခြင်း
     payment_details = await get_payment_details() 
     
-    # --- Payment Button နှိပ်ခြင်း ---
     if data in ["pay_kpay", "pay_wave"]:
         method = data.split("_")[1]
         details = payment_details.get(method)
@@ -281,7 +269,6 @@ async def button_callback(update: Update, context):
         message = "🌟 **Telegram Star ဈေးနှုန်းများ:** (Coin ဖြင့်သာ ဝယ်ယူနိုင်သည်)"
 
     elif data == "back_to_main":
-        # start function ကို ပြန်ခေါ်ခြင်းဖြင့် NameError မဖြစ်စေရန်
         return await start(query, context)
         
     else:
@@ -332,11 +319,10 @@ async def set_wave_command(update: Update, context):
         await update.message.reply_text("❌ ဖုန်းနံပါတ် ထည့်သွင်းရန် လိုအပ်ပါသည်။ (ဥပမာ: /setwave 09xxxxxxxxx)")
 
 
-# 8. Main Function (Bot ကို စတင် အလုပ်လုပ်စေရန်)
+# 8. Main Function (Bot ကို Webhook Mode ဖြင့် စတင် အလုပ်လုပ်စေရန်)
 def main():
     """Bot ကို စတင်ခြင်း"""
     
-    # 1. Google Sheet ချိတ်ဆက်ခြင်း (Error ဖြစ်ရင် Bot ရပ်မည်)
     try:
         setup_gsheet()
     except Exception as e:
@@ -346,17 +332,30 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # 2. Command Handlers
-    application.add_handler(CommandHandler("start", start)) # NameError ပြေလည်
+    application.add_handler(CommandHandler("start", start)) 
     application.add_handler(CommandHandler("setkpay", set_kpay_command)) 
     application.add_handler(CommandHandler("setwave", set_wave_command)) 
     
     # 3. Message/Callback Handlers
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo)) # ဓာတ်ပုံ (ပြေစာ) လက်ခံခြင်း
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo)) 
 
-    print("Bot စတင် အလုပ်လုပ်နေပါပြီ...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # --- 4. Webhook (Render Free Web Service အတွက်) ---
+    
+    # Environment Variables မှ URL ကို ယူသည်
+    WEBHOOK_URL = WEB_SERVICE_URL + '/' + BOT_TOKEN 
+    
+    print(f"Starting Bot in Webhook Mode on Port {PORT} at {WEBHOOK_URL}...")
+    
+    # Webhook ကို set လုပ်ပြီး Bot ကို Run ပါ
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN, 
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == '__main__':
     main()
